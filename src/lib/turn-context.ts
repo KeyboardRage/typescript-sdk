@@ -1,5 +1,5 @@
 import * as models from '../models/index.js';
-import type { TurnContext } from './tool-types.js';
+import type { TurnContext, Tool } from './tool-types.js';
 
 /**
  * Options for building a turn context
@@ -11,6 +11,8 @@ export interface BuildTurnContextOptions {
   toolCall?: models.OpenResponsesFunctionToolCall;
   /** The full request being sent to the API (optional for initial/async resolution contexts) */
   turnRequest?: models.OpenResponsesRequest;
+  /** Current tools available for execution (optional) */
+  tools?: readonly Tool[];
 }
 
 /**
@@ -26,6 +28,7 @@ export interface BuildTurnContextOptions {
  *   numberOfTurns: 1,
  *   toolCall: rawToolCall,
  *   turnRequest: currentRequest,
+ *   tools: currentTools,
  * });
  *
  * // For async parameter resolution (partial context)
@@ -45,6 +48,10 @@ export function buildTurnContext(options: BuildTurnContextOptions): TurnContext 
 
   if (options.turnRequest !== undefined) {
     context.turnRequest = options.turnRequest;
+  }
+
+  if (options.tools !== undefined) {
+    context.tools = options.tools;
   }
 
   return context;

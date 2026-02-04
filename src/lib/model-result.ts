@@ -159,6 +159,8 @@ export class ModelResult<TTools extends readonly Tool[]> {
   }> = [];
   // Track resolved request after async function resolution
   private resolvedRequest: models.OpenResponsesRequest | null = null;
+  // Track current tools (may be modified during execution)
+  private currentTools: TTools | null = null;
 
   // State management for multi-turn conversations
   private stateAccessor: StateAccessor<TTools> | null = null;
@@ -170,6 +172,9 @@ export class ModelResult<TTools extends readonly Tool[]> {
 
   constructor(options: GetResponseOptions<TTools>) {
     this.options = options;
+    
+    // Initialize current tools from options
+    this.currentTools = options.tools ?? null;
 
     // Runtime validation: approval decisions require state
     const hasApprovalDecisions =
@@ -227,6 +232,14 @@ export class ModelResult<TTools extends readonly Tool[]> {
       'output' in value &&
       !('toReadableStream' in value)
     );
+  }
+
+  /**
+   * Get the current tools list (may be modified during execution).
+   * Returns the dynamically updated tools or the initial tools from options.
+   */
+  private getCurrentTools(): readonly Tool[] {
+    return this.currentTools ?? this.options.tools ?? [];
   }
 
   // =========================================================================
@@ -370,7 +383,7 @@ export class ModelResult<TTools extends readonly Tool[]> {
    */
   private hasExecutableToolCalls(toolCalls: ParsedToolCall<Tool>[]): boolean {
     return toolCalls.some((toolCall) => {
-      const tool = this.options.tools?.find((t) => t.function.name === toolCall.name);
+      const tool = this.getCurrentTools().find((t) => t.function.name === toolCall.name);
       return tool && hasExecuteFunction(tool);
     });
   }
@@ -390,7 +403,7 @@ export class ModelResult<TTools extends readonly Tool[]> {
     const results: UnsentToolResult<TTools>[] = [];
 
     for (const tc of toolCalls) {
-      const tool = this.options.tools?.find(t => t.function.name === tc.name);
+      const tool = this.getCurrentTools().find(t => t.function.name === tc.name);
       if (!tool || !hasExecuteFunction(tool)) continue;
 
       const result = await executeTool(tool, tc as ParsedToolCall<Tool>, turnContext);
@@ -420,13 +433,14 @@ export class ModelResult<TTools extends readonly Tool[]> {
     currentRound: number,
     currentResponse: models.OpenResponsesNonStreamingResponse
   ): Promise<boolean> {
-    if (!this.options.tools) return false;
+    const currentTools = this.getCurrentTools();
+    if (currentTools.length === 0) return false;
 
-    const turnContext: TurnContext = { numberOfTurns: currentRound };
+    const turnContext: TurnContext = { numberOfTurns: currentRound, tools: currentTools };
 
     const { requiresApproval: needsApproval, autoExecute } = await partitionToolCalls(
       toolCalls as ParsedToolCall<TTools[number]>[],
-      this.options.tools,
+      currentTools as TTools,
       turnContext,
       this.requireApprovalFn ?? undefined
     );
@@ -475,7 +489,7 @@ export class ModelResult<TTools extends readonly Tool[]> {
     const toolResults: models.OpenResponsesFunctionCallOutput[] = [];
 
     for (const toolCall of toolCalls) {
-      const tool = this.options.tools?.find((t) => t.function.name === toolCall.name);
+      const tool = this.getCurrentTools().find((t) => t.function.name === toolCall.name);
       if (!tool || !hasExecuteFunction(tool)) continue;
 
       // Check if arguments failed to parse (remained as string instead of object)
@@ -577,13 +591,14 @@ export class ModelResult<TTools extends readonly Tool[]> {
    * @param toolCalls - The tool calls that were just executed
    */
   private async applyNextTurnParams(toolCalls: ParsedToolCall<Tool>[]): Promise<void> {
-    if (!this.options.tools || toolCalls.length === 0 || !this.resolvedRequest) {
+    const currentTools = this.getCurrentTools();
+    if (currentTools.length === 0 || toolCalls.length === 0 || !this.resolvedRequest) {
       return;
     }
 
     const computedParams = await executeNextTurnParamsFunctions(
       toolCalls,
-      this.options.tools,
+      currentTools,
       this.resolvedRequest
     );
 
@@ -592,6 +607,12 @@ export class ModelResult<TTools extends readonly Tool[]> {
         this.resolvedRequest,
         computedParams
       );
+      
+      // Update current tools if they were modified
+      if (computedParams.tools !== undefined) {
+        // Cast through unknown since we can't guarantee the type at runtime
+        this.currentTools = Array.from(computedParams.tools) as unknown as TTools;
+      }
     }
   }
 
@@ -852,8 +873,10 @@ export class ModelResult<TTools extends readonly Tool[]> {
     const unsentResults = [...(this.currentState.unsentToolResults ?? [])];
 
     // Build turn context - numberOfTurns represents the current turn (1-indexed after initial)
+    const currentTools = this.getCurrentTools();
     const turnContext: TurnContext = {
       numberOfTurns: this.allToolExecutionRounds.length + 1,
+      tools: currentTools,
     };
 
     // Process approvals - execute the approved tools
@@ -861,7 +884,7 @@ export class ModelResult<TTools extends readonly Tool[]> {
       const toolCall = pendingCalls.find(tc => tc.id === callId);
       if (!toolCall) continue;
 
-      const tool = this.options.tools?.find(t => t.function.name === toolCall.name);
+      const tool = currentTools.find(t => t.function.name === toolCall.name);
       if (!tool || !hasExecuteFunction(tool)) {
         // Can't execute, create error result
         unsentResults.push(createRejectedResult(callId, String(toolCall.name), 'Tool not found or not executable'));
@@ -1008,7 +1031,8 @@ export class ModelResult<TTools extends readonly Tool[]> {
         (item) => hasTypeProperty(item) && item.type === 'function_call'
       );
 
-      if (!this.options.tools?.length || !hasToolCalls) {
+      const currentTools = this.getCurrentTools();
+      if (currentTools.length === 0 || !hasToolCalls) {
         this.finalResponse = currentResponse;
         await this.markStateComplete();
         return;
@@ -1057,7 +1081,10 @@ export class ModelResult<TTools extends readonly Tool[]> {
         }
 
         // Build turn context
-        const turnContext: TurnContext = { numberOfTurns: currentRound + 1 };
+        const turnContext: TurnContext = { 
+          numberOfTurns: currentRound + 1,
+          tools: this.getCurrentTools(),
+        };
 
         // Resolve async functions for this turn
         await this.resolveAsyncFunctionsForTurn(turnContext);

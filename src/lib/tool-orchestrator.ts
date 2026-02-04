@@ -3,7 +3,7 @@ import type { APITool, Tool, ToolExecutionResult } from './tool-types.js';
 
 import { extractToolCallsFromResponse, responseHasToolCalls } from './stream-transformers.js';
 import { isFunctionCallItem } from './stream-type-guards.js';
-import { executeTool, findToolByName } from './tool-executor.js';
+import { executeTool, findToolByName, convertToolsToAPIFormat } from './tool-executor.js';
 import { hasExecuteFunction } from './tool-types.js';
 import { buildTurnContext } from './turn-context.js';
 import { executeNextTurnParamsFunctions, applyNextTurnParamsToRequest } from './next-turn-params.js';
@@ -54,12 +54,14 @@ export async function executeToolLoop(
   const toolExecutionResults: ToolExecutionResult<Tool>[] = [];
   let conversationInput: models.OpenResponsesInput = initialInput;
   let currentRequest: models.OpenResponsesRequest = { ...initialRequest };
+  let currentTools: Tool[] = tools;
+  let currentApiTools: APITool[] = apiTools;
 
   let currentRound = 0;
   let currentResponse: models.OpenResponsesNonStreamingResponse;
 
   // Initial request
-  currentResponse = await sendRequest(conversationInput, apiTools);
+  currentResponse = await sendRequest(conversationInput, currentApiTools);
   allResponses.push(currentResponse);
 
   // Loop until no more tool calls (model decides when to stop)
@@ -75,7 +77,7 @@ export async function executeToolLoop(
 
     // Check if any tools have execute functions
     const hasExecutableTools = toolCalls.some((toolCall) => {
-      const tool = findToolByName(tools, toolCall.name);
+      const tool = findToolByName(currentTools, toolCall.name);
       return tool && hasExecuteFunction(tool);
     });
 
@@ -86,7 +88,7 @@ export async function executeToolLoop(
 
     // Execute all tool calls in parallel (parallel tool calling)
     const toolCallPromises = toolCalls.map(async (toolCall) => {
-      const tool = findToolByName(tools, toolCall.name);
+      const tool = findToolByName(currentTools, toolCall.name);
 
       if (!tool) {
         // Tool not found in definitions
@@ -128,6 +130,7 @@ export async function executeToolLoop(
         numberOfTurns: currentRound,
         toolCall: openResponsesToolCall,
         turnRequest: currentRequest,
+        tools: currentTools,
       });
 
       // Execute the tool
@@ -165,7 +168,7 @@ export async function executeToolLoop(
     // Execute nextTurnParams functions for tools that were called
     const computedParams = await executeNextTurnParamsFunctions(
       toolCalls,
-      tools,
+      currentTools,
       currentRequest
     );
 
@@ -173,6 +176,12 @@ export async function executeToolLoop(
     if (Object.keys(computedParams).length > 0) {
       currentRequest = applyNextTurnParamsToRequest(currentRequest, computedParams);
       conversationInput = currentRequest.input ?? conversationInput;
+      
+      // Handle tools modification if tools were updated
+      if (computedParams.tools !== undefined) {
+        currentTools = Array.from(computedParams.tools);
+        currentApiTools = convertToolsToAPIFormat(currentTools);
+      }
     }
 
     // Build array input with all output from previous response plus tool results
@@ -184,7 +193,7 @@ export async function executeToolLoop(
     // Tool results are automatically associated with the previous response's tool calls
 
     // Send updated conversation to API - this should use previousResponseId
-    currentResponse = await sendRequest(conversationInput, apiTools);
+    currentResponse = await sendRequest(conversationInput, currentApiTools);
     allResponses.push(currentResponse);
   }
 

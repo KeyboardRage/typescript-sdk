@@ -21,6 +21,8 @@ export interface TurnContext {
   numberOfTurns: number;
   /** The full request being sent to the API (only available during tool execution) */
   turnRequest?: models.OpenResponsesRequest;
+  /** Current tools available for execution (read-only view) */
+  tools?: readonly Tool[];
 }
 
 /**
@@ -45,6 +47,8 @@ export type NextTurnParamsContext = {
   topK?: number | undefined;
   /** Current instructions */
   instructions: string | null;
+  /** Current tools available for execution */
+  tools: readonly Tool[];
 };
 
 /**
