@@ -13,10 +13,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Extracts relevant fields that can be modified by nextTurnParams functions
  *
  * @param request - The current OpenResponsesRequest
+ * @param tools - The current tools available for execution
  * @returns Context object with current parameter values
  */
 export function buildNextTurnParamsContext(
-  request: models.OpenResponsesRequest
+  request: models.OpenResponsesRequest,
+  tools: readonly Tool[]
 ): NextTurnParamsContext {
   return {
     input: request.input ?? [],
@@ -27,6 +29,7 @@ export function buildNextTurnParamsContext(
     topP: request.topP ?? null,
     topK: request.topK,
     instructions: request.instructions ?? null,
+    tools: tools,
   };
 }
 
@@ -37,7 +40,7 @@ export function buildNextTurnParamsContext(
  * @param toolCalls - Tool calls that were executed in this turn
  * @param tools - All available tools
  * @param currentRequest - The current request
- * @returns Object with computed parameter values
+ * @returns Object with computed parameter values including potentially modified tools
  */
 export async function executeNextTurnParamsFunctions(
   toolCalls: ParsedToolCall<Tool>[],
@@ -45,7 +48,7 @@ export async function executeNextTurnParamsFunctions(
   currentRequest: models.OpenResponsesRequest
 ): Promise<Partial<NextTurnParamsContext>> {
   // Build initial context from current request
-  const context = buildNextTurnParamsContext(currentRequest);
+  const context = buildNextTurnParamsContext(currentRequest, tools);
 
   // Collect all nextTurnParams functions from tools (in tools array order)
   const result: Partial<NextTurnParamsContext> = {};
@@ -103,10 +106,13 @@ async function processNextTurnParamsForCall(
 
     // Validate that paramKey is actually a key of NextTurnParamsContext
     if (!isValidNextTurnParamKey(paramKey)) {
-      if (process.env['NODE_ENV'] !== 'production') {
+      // Only log warnings in development (when process is available)
+      const isDevelopment = typeof globalThis !== 'undefined' && 
+        (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.['NODE_ENV'] !== 'production';
+      if (isDevelopment) {
         console.warn(
           `Invalid nextTurnParams key "${paramKey}" in tool "${toolName}". ` +
-          `Valid keys: input, model, models, temperature, maxOutputTokens, topP, topK, instructions`
+          `Valid keys: input, model, models, temperature, maxOutputTokens, topP, topK, instructions, tools`
         );
       }
       continue;
@@ -135,6 +141,7 @@ function isValidNextTurnParamKey(key: string): key is keyof NextTurnParamsContex
     'topP',
     'topK',
     'instructions',
+    'tools',
   ]);
   return validKeys.has(key);
 }
@@ -155,6 +162,7 @@ function setNextTurnParam<K extends keyof NextTurnParamsContext>(
 /**
  * Apply computed nextTurnParams to the current request
  * Returns a new request object with updated parameters
+ * Note: tools field is excluded as it's not part of the request
  *
  * @param request - The current request
  * @param computedParams - Computed parameter values from nextTurnParams functions
@@ -164,8 +172,11 @@ export function applyNextTurnParamsToRequest(
   request: models.OpenResponsesRequest,
   computedParams: Partial<NextTurnParamsContext>
 ): models.OpenResponsesRequest {
+  // Extract tools from computed params (not part of request)
+  const { tools: _, ...requestParams } = computedParams;
+  
   return {
     ...request,
-    ...computedParams,
+    ...requestParams,
   };
 }
