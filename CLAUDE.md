@@ -114,9 +114,25 @@ This reads configuration from `.speakeasy/gen.yaml` and workflow from `.speakeas
 
 **Next Turn Params** (`src/lib/next-turn-params.ts`)
 - Tools can define `nextTurnParams` to modify request parameters after execution
-- Functions receive tool input and can return parameter updates
+- Functions receive tool input and current context including available tools
 - Applied after tool execution, before next API request
-- Example: Increase temperature after seeing tool results
+- **Dynamic Tool Loading**: Tools can be modified via `nextTurnParams.tools` function
+  - Add new tools based on execution results
+  - Remove tools to restrict capabilities
+  - Filter or reorder tools dynamically
+- Example: Add specialized tools after analyzing initial results
+- Example: `tools: (params, context) => [...context.tools, newTool]`
+
+**Turn Context** (`src/lib/turn-context.ts`)
+- Context object passed to tool `execute` functions and async parameter resolution
+- Contains:
+  - `numberOfTurns`: Current turn number (1-indexed)
+  - `toolCall`: The specific tool call being executed
+  - `turnRequest`: Full request being sent to API
+  - `tools`: **Readonly array of currently available tools**
+- Tools can inspect `context.tools` to see what other tools are available
+- Enables tools to make decisions based on available capabilities
+- Example: A router tool can check which tools are available before delegating
 
 **Stop Conditions** (`src/lib/stop-conditions.ts`)
 - Control when tool execution loops terminate
